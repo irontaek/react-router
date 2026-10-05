@@ -6,6 +6,7 @@ import type {
 } from "../../lib/router/utils";
 import { getSingleFetchDataStrategyImpl } from "../../lib/dom/ssr/single-fetch";
 import { createStaticHandler } from "../../lib/router/router";
+import { redirect } from "../../lib/router/utils";
 import {
   createDeferred,
   createAsyncStub,
@@ -1855,6 +1856,148 @@ describe("router dataStrategy", () => {
   });
 
   describe("initiator", () => {
+    it.each(["navigation", "fetcher"] as const)(
+      "preserves the %s initiator from an action through loader and fetcher reloads",
+      async (initiator) => {
+        let calls: Array<{
+          method: string;
+          initiator: DataStrategyInitiator;
+          fetcherKey: string | null;
+        }> = [];
+        let t = setup({
+          routes: [
+            { id: "root", path: "/", loader: true, action: true },
+            { id: "resource", path: "/resource", loader: true },
+          ],
+          hydrationData: { loaderData: { root: "ROOT" } },
+          dataStrategy({ request, matches, initiator, fetcherKey }) {
+            calls.push({ method: request.method, initiator, fetcherKey });
+            return Promise.resolve(
+              Object.fromEntries(
+                matches
+                  .filter((match) => match.shouldCallHandler())
+                  .map((match) => [
+                    match.route.id,
+                    { type: "data" as const, result: match.route.id },
+                  ]),
+              ),
+            );
+          },
+        });
+
+        t.router.getFetcher("tracked");
+        await t.router.fetch("tracked", "root", "/resource");
+        calls = [];
+
+        let submission = {
+          formMethod: "post" as const,
+          formData: createFormData({}),
+        };
+        if (initiator === "navigation") {
+          await t.router.navigate("/", submission);
+        } else {
+          await t.router.fetch("submitter", "root", "/", submission);
+        }
+
+        expect(calls).toEqual([
+          {
+            method: "POST",
+            initiator,
+            fetcherKey: initiator === "fetcher" ? "submitter" : null,
+          },
+          { method: "GET", initiator, fetcherKey: null },
+          { method: "GET", initiator, fetcherKey: "tracked" },
+        ]);
+        expect(t.router.state.loaderData).toEqual({ root: "root" });
+        expect(t.fetchers.tracked.data).toBe("resource");
+      },
+    );
+
+    it.each([
+      ["initialization", "GET"],
+      ["navigation", "GET"],
+      ["navigation", "POST"],
+      ["fetcher", "GET"],
+      ["fetcher", "POST"],
+      ["revalidation", "GET"],
+    ] as const)(
+      "preserves the %s initiator through a %s redirect",
+      async (initiator, method) => {
+        let calls: Array<{
+          pathname: string;
+          method: string;
+          initiator: DataStrategyInitiator;
+          fetcherKey: string | null;
+        }> = [];
+        let t = setup({
+          routes: [
+            { id: "redirect", path: "/redirect", loader: true, action: true },
+            { id: "target", path: "/target", loader: true },
+          ],
+          initialEntries: [
+            initiator === "initialization" || initiator === "revalidation"
+              ? "/redirect"
+              : "/target",
+          ],
+          hydrationData:
+            initiator === "initialization"
+              ? undefined
+              : { loaderData: { redirect: "REDIRECT", target: "TARGET" } },
+          dataStrategy({ request, matches, initiator, fetcherKey }) {
+            let pathname = new URL(request.url).pathname;
+            calls.push({
+              pathname,
+              method: request.method,
+              initiator,
+              fetcherKey,
+            });
+            return Promise.resolve(
+              Object.fromEntries(
+                matches
+                  .filter((match) => match.shouldCallHandler())
+                  .map((match) => [
+                    match.route.id,
+                    {
+                      type: "data" as const,
+                      result:
+                        pathname === "/redirect"
+                          ? redirect("/target")
+                          : "TARGET",
+                    },
+                  ]),
+              ),
+            );
+          },
+        });
+
+        let submission =
+          method === "POST"
+            ? { formMethod: "post" as const, formData: createFormData({}) }
+            : undefined;
+        if (initiator === "initialization") {
+          await tick();
+        } else if (initiator === "navigation") {
+          await t.router.navigate("/redirect", submission);
+        } else if (initiator === "fetcher") {
+          await t.router.fetch("key", "target", "/redirect", submission);
+        } else {
+          await t.router.revalidate();
+        }
+
+        expect(calls).toEqual([
+          {
+            pathname: "/redirect",
+            method,
+            initiator,
+            fetcherKey: initiator === "fetcher" ? "key" : null,
+          },
+          { pathname: "/target", method: "GET", initiator, fetcherKey: null },
+        ]);
+        expect(t.router.state.location.pathname).toBe("/target");
+        expect(t.router.state.loaderData).toEqual({ target: "TARGET" });
+      },
+    );
+
     it("identifies client-side data strategy initiators", async () => {
       let calls: Array<{
         initiator: DataStrategyInitiator;

@@ -82,10 +82,6 @@ import type { DataRouteMatcher } from "./matcher";
 import { V6RegExMatcher } from "./matcher";
 import { RoutePatternDataRouteMatcher } from "./matcher-route-pattern";
 import { validateNavigationTarget } from "./navigation";
-import {
-  getDataStrategyInitiator,
-  setDataStrategyInitiator,
-} from "./data-strategy-context";
 
 ////////////////////////////////////////////////////////////////////////////////
 //#region Types and Constants
@@ -2028,7 +2024,6 @@ export function createRouter(init: RouterInit): Router {
     let dataStrategyInitiator: DataStrategyInitiator = opts?.initialHydration
       ? "initialization"
       : (opts?.dataStrategyInitiator ?? "navigation");
-    setDataStrategyInitiator(request, dataStrategyInitiator);
     // Create a new context per navigation
     let scopedContext = init.getContext
       ? await init.getContext()
@@ -2052,6 +2047,7 @@ export function createRouter(init: RouterInit): Router {
       // Call action if we received an action submission
       let actionResult = await handleAction(
         request,
+        dataStrategyInitiator,
         location,
         opts.submission,
         matches,
@@ -2106,7 +2102,6 @@ export function createRouter(init: RouterInit): Router {
         request.url,
         request.signal,
       );
-      setDataStrategyInitiator(request, dataStrategyInitiator);
     }
 
     // Call loaders
@@ -2118,6 +2113,7 @@ export function createRouter(init: RouterInit): Router {
       workingFetchers,
     } = await handleLoaders(
       request,
+      dataStrategyInitiator,
       location,
       matches,
       historyAction,
@@ -2155,6 +2151,7 @@ export function createRouter(init: RouterInit): Router {
   // redirects/errors
   async function handleAction(
     request: Request,
+    dataStrategyInitiator: DataStrategyInitiator,
     location: Location,
     submission: Submission,
     matches: DataRouteMatch[],
@@ -2261,6 +2258,7 @@ export function createRouter(init: RouterInit): Router {
         dsMatches,
         scopedContext,
         null,
+        dataStrategyInitiator,
       );
       result = results[actionMatch.route.id];
 
@@ -2296,10 +2294,16 @@ export function createRouter(init: RouterInit): Router {
         );
         replace = location === state.location.pathname + state.location.search;
       }
-      await startRedirectNavigation(request, result, true, {
-        submission,
-        replace,
-      });
+      await startRedirectNavigation(
+        request,
+        result,
+        true,
+        dataStrategyInitiator,
+        {
+          submission,
+          replace,
+        },
+      );
       return { shortCircuited: true };
     }
 
@@ -2337,6 +2341,7 @@ export function createRouter(init: RouterInit): Router {
   // errors, etc.
   async function handleLoaders(
     request: Request,
+    dataStrategyInitiator: DataStrategyInitiator,
     location: Location,
     matches: DataRouteMatch[],
     historyAction: NavigationType,
@@ -2536,6 +2541,7 @@ export function createRouter(init: RouterInit): Router {
         request,
         location,
         scopedContext,
+        dataStrategyInitiator,
       );
 
     if (request.signal.aborted) {
@@ -2557,9 +2563,15 @@ export function createRouter(init: RouterInit): Router {
     // If any loaders returned a redirect Response, start a new REPLACE navigation
     let redirect = findRedirect(loaderResults);
     if (redirect) {
-      await startRedirectNavigation(request, redirect.result, true, {
-        replace,
-      });
+      await startRedirectNavigation(
+        request,
+        redirect.result,
+        true,
+        dataStrategyInitiator,
+        {
+          replace,
+        },
+      );
       return { shortCircuited: true };
     }
 
@@ -2569,9 +2581,15 @@ export function createRouter(init: RouterInit): Router {
       // fetchRedirectIds so it doesn't get revalidated on the next set of
       // loader executions
       fetchRedirectIds.add(redirect.key);
-      await startRedirectNavigation(request, redirect.result, true, {
-        replace,
-      });
+      await startRedirectNavigation(
+        request,
+        redirect.result,
+        true,
+        dataStrategyInitiator,
+        {
+          replace,
+        },
+      );
       return { shortCircuited: true };
     }
 
@@ -2776,7 +2794,6 @@ export function createRouter(init: RouterInit): Router {
       abortController.signal,
       submission,
     );
-    setDataStrategyInitiator(fetchRequest, "fetcher");
 
     if (isFogOfWar) {
       let discoverResult = await discoverRoutes(
@@ -2836,6 +2853,7 @@ export function createRouter(init: RouterInit): Router {
       fetchMatches,
       scopedContext,
       key,
+      "fetcher",
     );
     let actionResult = actionResults[match.route.id];
 
@@ -2880,10 +2898,16 @@ export function createRouter(init: RouterInit): Router {
         } else {
           fetchRedirectIds.add(key);
           updateFetcherState(key, getLoadingFetcher(submission));
-          return startRedirectNavigation(fetchRequest, actionResult, false, {
-            fetcherSubmission: submission,
-            preventScrollReset,
-          });
+          return startRedirectNavigation(
+            fetchRequest,
+            actionResult,
+            false,
+            "fetcher",
+            {
+              fetcherSubmission: submission,
+              preventScrollReset,
+            },
+          );
         }
       }
 
@@ -2902,7 +2926,6 @@ export function createRouter(init: RouterInit): Router {
       nextLocation,
       abortController.signal,
     );
-    setDataStrategyInitiator(revalidationRequest, "fetcher");
     let matches =
       state.navigation.state !== "idle"
         ? dataRouteMatcher.match(state.navigation.location)
@@ -2979,6 +3002,7 @@ export function createRouter(init: RouterInit): Router {
         revalidationRequest,
         nextLocation,
         scopedContext,
+        "fetcher",
       );
 
     if (abortController.signal.aborted) {
@@ -3023,6 +3047,7 @@ export function createRouter(init: RouterInit): Router {
         revalidationRequest,
         redirect.result,
         false,
+        "fetcher",
         { preventScrollReset },
       );
     }
@@ -3038,6 +3063,7 @@ export function createRouter(init: RouterInit): Router {
         revalidationRequest,
         redirect.result,
         false,
+        "fetcher",
         { preventScrollReset },
       );
     }
@@ -3126,7 +3152,6 @@ export function createRouter(init: RouterInit): Router {
       path,
       abortController.signal,
     );
-    setDataStrategyInitiator(fetchRequest, "fetcher");
 
     if (loadMatch.isDiscovering) {
       let discoverResult = await discoverRoutes(
@@ -3178,6 +3203,7 @@ export function createRouter(init: RouterInit): Router {
       dsMatches,
       scopedContext,
       key,
+      "fetcher",
     );
     let result = results[match.route.id];
 
@@ -3217,7 +3243,7 @@ export function createRouter(init: RouterInit): Router {
         return;
       } else {
         fetchRedirectIds.add(key);
-        await startRedirectNavigation(fetchRequest, result, false, {
+        await startRedirectNavigation(fetchRequest, result, false, "fetcher", {
           preventScrollReset,
         });
         return;
@@ -3257,6 +3283,7 @@ export function createRouter(init: RouterInit): Router {
     request: Request,
     redirect: RedirectResult,
     isNavigation: boolean,
+    dataStrategyInitiator: DataStrategyInitiator,
     {
       submission,
       fetcherSubmission,
@@ -3269,9 +3296,6 @@ export function createRouter(init: RouterInit): Router {
       replace?: boolean;
     } = {},
   ) {
-    let dataStrategyInitiator =
-      getDataStrategyInitiator(request) ??
-      (isNavigation ? "navigation" : "fetcher");
     // If we are interrupting a popstate navigation from a fetcher call that
     // redirected, resolve the pending promise since we won't reach completeNavigation
     // for that popstate navigation
@@ -3407,6 +3431,7 @@ export function createRouter(init: RouterInit): Router {
     matches: DataStrategyMatch[],
     scopedContext: RouterContextProvider,
     fetcherKey: string | null,
+    initiator: DataStrategyInitiator,
   ): Promise<Record<string, DataResult>> {
     let results: Record<string, DataStrategyResult>;
     let dataResults: Record<string, DataResult> = {};
@@ -3417,8 +3442,7 @@ export function createRouter(init: RouterInit): Router {
         path,
         matches,
         fetcherKey,
-        getDataStrategyInitiator(request) ??
-          (fetcherKey != null ? "fetcher" : "navigation"),
+        initiator,
         scopedContext,
         false,
       );
@@ -3494,10 +3518,8 @@ export function createRouter(init: RouterInit): Router {
     request: Request,
     location: Location,
     scopedContext: RouterContextProvider,
+    initiator: DataStrategyInitiator,
   ) {
-    let dataStrategyInitiator =
-      getDataStrategyInitiator(request) ?? "navigation";
-
     // Kick off loaders and fetchers in parallel
     let loaderResultsPromise = callDataStrategy(
       request,
@@ -3505,18 +3527,19 @@ export function createRouter(init: RouterInit): Router {
       matches,
       scopedContext,
       null,
+      initiator,
     );
 
     let fetcherResultsPromise = Promise.all(
       fetchersToLoad.map(async (f) => {
         if (f.matches && f.match && f.request && f.controller) {
-          setDataStrategyInitiator(f.request, dataStrategyInitiator);
           let results = await callDataStrategy(
             f.request,
             f.path,
             f.matches,
             scopedContext,
             f.key,
+            initiator,
           );
           let result = results[f.match.route.id];
           // Fetcher results are keyed by fetcher key from here on out, not routeId
